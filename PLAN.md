@@ -4,6 +4,10 @@ wayaku JSON(단어장)과 유튜브 링크로 **FHD(1920×1080) 가사 영상**�
 가사·발음·단어 설명이 나오는 방식은 [hanon-lyrics](https://github.com/ssiloh/hanon-lyrics)의 미리보기 화면과 **똑같이** 한다.
 
 > 상태: 계획 단계 (코드 없음). 아래 "열린 질문"을 정한 뒤 M0부터 시작한다.
+>
+> 결정된 사항
+> - 타이밍 입력은 **파일 경로와 hanon-lyrics 서버를 둘 다 지원**한다.
+> - 타이밍을 찍고 고치는 **편집기를 별도 기능으로 제공**한다. 가벼운 **로컬 웹 앱**으로 만든다 (4.7 / 6장 편집기 트랙).
 
 ---
 
@@ -31,9 +35,13 @@ wayaku JSON은 가사·발음·단위·단어 설명만 갖고 있고 **"몇 초
 - 따라서 **영상 생성의 필수 입력은 타이밍 JSON**이고, wayaku JSON은 (a) 제목·링크·`원어`/`번역어` 읽기, (b) 타이밍 JSON에 설명이 빠진 줄 보충, (c) 검증에 쓴다.
 - 레포 안의 일부 타이밍 파일(예: `yours-timing.json`)은 `startTime`이 전부 `null`이다. 즉 앱에서 타이밍을 아직 찍지 않은 곡은 영상을 만들 수 없다. 렌더 전에 검증하고 명확한 에러로 중단한다.
 
-**타이밍 입력 방법(택1 또는 둘 다 지원)**
+**타이밍 입력 방법 (둘 다 지원, 결정됨)**
 1. 파일 경로: `--timing path/to/song-timing.json`
 2. hanon-lyrics 서버에서 가져오기: `--video-id <id>` → `GET /api/timing?videoId=<id>` (Vercel Blob에 저장된 `timing/{videoId}.json`)
+
+두 옵션을 동시에 주면 에러로 처리한다 (어느 쪽이 기준인지 모호하므로). 서버에서 가져온 타이밍은 `.cache/{videoId}/timing.json`에 사본을 남긴다.
+
+타이밍이 없거나 덜 찍힌 곡은 **편집기(4.7)** 로 찍어서 같은 형식의 JSON으로 저장한 뒤 위 두 방법 중 하나로 렌더에 넘긴다. 편집기가 만드는 파일은 hanon-lyrics의 `SongTiming`과 형식이 같아서, 두 도구가 서로의 파일을 그대로 읽고 쓴다.
 
 ## 3. 입력 / 출력
 
@@ -43,6 +51,15 @@ wayaku2video render \
   --timing  ./wayaku/yours-timing.json \      # 또는 --video-id DGXPro9x0yo
   [--url    https://youtu.be/DGXPro9x0yo] \   # 생략 시 wayaku의 "유튜브링크"
   --out     ./out/yours.mp4
+```
+
+편집기와 타이밍 동기화 명령 (4.7):
+
+```
+wayaku2video edit   --wayaku ./wayaku/yours_wayaku.json [--timing ./yours-timing.json | --video-id DGXPro9x0yo]
+                    [--port 5173]                    # 로컬 웹 앱을 띄우고 브라우저를 연다
+wayaku2video timing pull --video-id DGXPro9x0yo --out ./yours-timing.json   # 서버 → 파일
+wayaku2video timing push --video-id DGXPro9x0yo --timing ./yours-timing.json # 파일 → 서버 (확인 필요)
 ```
 
 - 출력: `1920×1080`, 30fps, H.264(`yuv420p`) + AAC 192k, `.mp4`. 기본 CRF 18.
@@ -109,6 +126,33 @@ wayaku2video render \
 - Remotion이 만든 무음 영상 + `.cache/{videoId}/audio.wav`를 ffmpeg로 mux (Remotion 내장 오디오 사용도 가능).
 - 오디오와 영상의 시작 오프셋(`--offset <초>`)을 옵션으로 둔다. 앱에서 찍은 타이밍과 yt-dlp로 받은 오디오 사이에 앞부분 무음 차이가 있을 수 있기 때문.
 
+### 4.7 타이밍 편집기 (로컬 웹 앱)
+
+렌더와 **분리된 기능**이다. 렌더 파이프라인은 편집기 없이도 동작하고, 편집기는 타이밍 JSON만 만들어 낸다.
+
+**형태**
+- `wayaku2video edit`가 로컬 HTTP 서버(기본 `127.0.0.1:5173`)를 띄우고 브라우저를 연다. 외부에서 접속할 수 없도록 로컬 주소에만 바인딩한다.
+- 가볍게 간다: Node 서버 한 개 + 가벼운 프런트(바닐라 TS 또는 Preact, 빌드는 Vite 정도). 데이터베이스 없음. 상태는 타이밍 JSON 파일 하나.
+- 오디오는 4.2에서 받아 둔 `.cache/{videoId}/audio.wav`를 서버가 그대로 서빙한다 (유튜브 임베드 대신 로컬 오디오라 재생 위치가 정확하고 오프라인에서도 동작).
+
+**v1 기능 (줄 단위)**
+1. 가사 목록 표시 (`재생순서` 반복 포함, 줄마다 시작 시각 칸).
+2. 오디오 재생/일시정지/±N초 이동/배속, 현재 재생 위치 표시.
+3. **스탬프**: 재생 중 `Space`를 누르면 현재 재생 위치를 선택된 줄의 `startTime`으로 기록하고 다음 줄로 이동.
+4. **미세 조정**: 선택한 줄의 시각을 ±0.05초/±0.5초 단위로 이동, 줄 시각을 직접 입력, 줄 시각 지우기.
+5. 줄 클릭 시 그 시각(−1초)부터 재생해 바로 확인.
+6. **실시간 미리보기**: 렌더에 쓰는 `LyricScreen` 컴포넌트를 그대로 사용해, 현재 재생 위치에서 영상에 나올 화면을 옆에 보여준다. 편집기에서 본 것이 곧 영상이 되도록 한다.
+7. 검증 표시: 비어 있는 줄, 시간 역전을 목록에서 바로 표시 (4.1과 같은 검증 코드를 공유).
+8. 저장: 타이밍 JSON 파일에 저장 (자동 임시 저장 + 수동 저장). 저장 전 `.bak` 백업 한 벌 유지.
+
+**서버 연동 (명시적 동작만)**
+- 불러오기: 시작 시 `--video-id`를 주면 서버의 타이밍을 가져와 편집 시작 (`timing pull`과 동일).
+- 올리기: 편집기의 "서버에 올리기" 버튼 또는 `timing push`. **hanon-lyrics의 실제 데이터를 덮어쓰는 동작**이므로 ① 올리기 전에 서버의 현재 값을 `.cache/{videoId}/timing.server-backup-<시각>.json`으로 자동 백업하고 ② 변경된 줄 수를 보여 주고 사용자가 확인해야만 전송한다. 자동 업로드는 하지 않는다.
+
+**나중에 (v2, 범위 밖)**
+- 단위(어절) 단위 스탬프 (`units[].startTime`). v1의 영상 렌더는 줄 단위만 쓰므로 필요해질 때 추가.
+- 파형 표시, 구간 반복 재생, 자동 정렬 결과를 초안으로 불러오기.
+
 ## 5. 저장소 구조 (안)
 
 ```
@@ -119,11 +163,15 @@ wayaku2video/
 │  ├─ cli.ts              # render 명령 진입점
 │  ├─ load.ts             # wayaku/타이밍 로드·검증
 │  ├─ download.ts         # yt-dlp 호출, 캐시
+│  ├─ timingSource.ts     # 파일/서버 타이밍 읽기·쓰기(pull/push, 백업)
 │  ├─ plan.ts             # 시간 → 활성 줄 계산
 │  ├─ types.ts            # hanon-lyrics의 types/timing.ts 복사(동기화 주의)
-│  └─ video/
-│     ├─ Root.tsx         # Remotion 컴포지션 (1920×1080, 30fps)
-│     └─ LyricScreen.tsx  # PreviewScreen 배치를 옮긴 컴포넌트
+│  ├─ video/
+│  │  ├─ Root.tsx         # Remotion 컴포지션 (1920×1080, 30fps)
+│  │  └─ LyricScreen.tsx  # PreviewScreen 배치를 옮긴 컴포넌트 (렌더·편집기 공용)
+│  └─ editor/
+│     ├─ server.ts        # 로컬 서버: 정적 파일, 오디오, 타이밍 저장 API
+│     └─ web/             # 편집기 프런트 (LyricScreen 재사용)
 ├─ fonts/                 # Noto Sans KR/JP
 ├─ samples/               # 테스트용 wayaku + 타이밍 JSON
 └─ out/                   # 결과물 (gitignore)
@@ -140,12 +188,23 @@ wayaku2video/
 | **M4** | 다국어 대응(`원어`/`번역어`), 넘침 처리, `--offset` | `ja`/`en` 번역어 샘플로 각각 렌더 성공 |
 | **M5** | 여러 곡 일괄 렌더, 에러 메시지·README 정리 | `wayaku/` 폴더 전체를 한 명령으로 처리 |
 
+**편집기 트랙** (렌더 M1~M3과 병행 가능, `LyricScreen`은 M2 결과를 공유)
+
+| 단계 | 내용 | 완료 기준 |
+|---|---|---|
+| **E0** | `timingSource.ts`: 파일/서버 읽기, `timing pull`, 백업 | 서버 타이밍을 파일로 받아 `SongTiming` 검증 통과 |
+| **E1** | 로컬 서버 + 최소 UI: 가사 목록, 오디오 재생, `Space` 스탬프, 파일 저장 | 샘플 곡의 모든 줄을 찍어 JSON 저장, 렌더 입력으로 그대로 사용 가능 |
+| **E2** | 미세 조정, 줄 클릭 재생, `LyricScreen` 실시간 미리보기, 검증 표시 | 찍은 결과를 편집기 미리보기와 렌더 영상에서 같은 줄/시각으로 확인 |
+| **E3** | 서버 올리기(`timing push`): 자동 백업, 변경 줄 수 확인 | 확인 없이는 전송되지 않음, 백업 파일 생성 확인 |
+
 ## 7. 테스트 / 검증
 
 - 단위 테스트: 장면 계획(`plan.ts`) — 경계 시각, 마지막 줄, 인트로, 반복 줄.
 - 검증기 테스트: `null` 타이밍, 역전, 줄 수 불일치, `재생순서` 범위 초과 입력이 각각 올바른 에러를 내는지.
 - 시각 확인: 샘플 곡의 대표 프레임 5장(첫 줄, 단어가 가장 많은 줄, 마지막 줄 등)을 PNG로 저장해 hanon-lyrics 화면과 비교.
 - 싱크 확인: 줄 전환 시각 3곳을 사람이 직접 재생해 확인.
+- 편집기: 스탬프 → 저장 → 다시 불러오기가 값 손실 없이 왕복되는지, hanon-lyrics가 저장한 파일을 편집기가 열고 편집기가 저장한 파일을 hanon-lyrics가 여는지(형식 호환) 확인.
+- `timing push`: 확인 없이 전송되지 않는지, 백업이 먼저 만들어지는지를 실제 서버 대신 가짜 서버로 테스트 (실제 데이터는 테스트에 쓰지 않는다).
 
 ## 8. 위험 요소
 
@@ -156,15 +215,18 @@ wayaku2video/
 | **저작권** — 원곡 오디오를 쓴 영상 | 개인 소장·학습용으로 한정하는 것을 README에 명시. 공개 업로드는 별도 판단 (자동화 범위 밖) |
 | 싱크 어긋남 | `--offset` 옵션, 오디오 길이 검증 |
 | 무거운 렌더(Chromium+인코딩) | 이 개발 기기(Android Termux proot)에서는 느리거나 실패할 수 있음 → 렌더는 PC 또는 GitHub Actions에서 실행하는 것을 기본으로 가정 |
+| **서버 데이터 덮어쓰기** — `timing push`가 hanon-lyrics의 실제 타이밍을 덮어씀 (Blob은 `allowOverwrite`) | 올리기 전 서버 값 자동 백업 + 변경 줄 수 확인 후에만 전송. 자동 업로드 없음 |
+| 편집기 로컬 서버 노출 | `127.0.0.1`에만 바인딩, 외부 접속 불가. 파일 저장은 지정한 타이밍 파일 경로로만 허용 |
 | hanon-lyrics 타입 변경 | `types.ts`를 복사본으로 두되 `원어/번역어` 같은 변경 시 같이 갱신. 필요하면 후속으로 공용 패키지화 |
 
 ## 9. 열린 질문 (진행 전에 정할 것)
 
-1. **타이밍을 어디서 가져올까?** 파일 경로만 / 서버(`--video-id`)만 / 둘 다. (제안: 둘 다)
+1. ~~타이밍을 어디서 가져올까?~~ → **결정: 파일과 서버 둘 다 지원, 편집기는 별도 로컬 웹 앱.**
 2. **렌더 환경**: PC에서 돌릴지, GitHub Actions에서 돌릴지. (제안: 로컬 PC 우선, Actions는 M5 이후)
 3. **인트로 제목 카드**: 넣을지, 곡 시작부터 바로 첫 줄을 보여줄지.
 4. **단위(어절) 단위 강조(노래방식 하이라이트)**: hanon-lyrics와 똑같이 하려면 불필요하지만, `units[].startTime`이 있으므로 후속 옵션으로 추가 가능. 지금은 범위 밖으로 둠.
 5. 레포 공개 여부: 우선 비공개.
+6. **편집기 v1의 스탬프 단위**: 줄 단위만 (제안) / 단위(어절)까지. 영상 렌더가 줄 단위만 쓰므로 줄 단위로 시작하고, 단위 스탬프는 v2로 둔다.
 
 ## 10. 참고
 - hanon-lyrics: 데이터 형식 `src/types/timing.ts`, 화면 `src/components/PreviewScreen.tsx`, 문구 `src/i18n/translations.ts`, wayaku 형식 설명 `wayaku/readme.txt`.
