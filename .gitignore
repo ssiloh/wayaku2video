@@ -1,0 +1,16 @@
+# 원곡 오디오/영상과 캐시는 공개 레포에 올리지 않는다 (PLAN.md 4.8 보안)
+.cache/
+out/
+*.wav
+*.m4a
+*.mp3
+*.opus
+*.webm
+*.mp4
+
+# 쿠키·토큰·환경변수
+cookies*.txt
+.env
+.env.*
+
+node_modules/
